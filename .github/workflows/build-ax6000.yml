@@ -1,0 +1,492 @@
+name: Build FanchmWrt AX6000 + SQM CAKE
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TZ: Europe/London
+  TARGET_BRANCH: fanchmwrt-25.12.4
+
+jobs:
+  build:
+    name: AX6000 U-Boot + SQM
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      # ------------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 1
+
+      # ------------------------------------------------------------
+      # Free disk space
+      # ------------------------------------------------------------
+      - name: Free disk space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+
+          sudo docker image prune -af || true
+          sudo docker builder prune -af || true
+
+          echo
+          echo "Disk space after cleanup:"
+          df -h
+
+      # ------------------------------------------------------------
+      # Build dependencies
+      # ------------------------------------------------------------
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            flex \
+            bison \
+            g++ \
+            gawk \
+            gcc-multilib \
+            g++-multilib \
+            gettext \
+            git \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libssl-dev \
+            libelf-dev \
+            python3 \
+            python3-dev \
+            python3-pip \
+            python3-setuptools \
+            rsync \
+            swig \
+            unzip \
+            zlib1g-dev \
+            file \
+            wget \
+            curl \
+            subversion \
+            time \
+            xsltproc \
+            zstd \
+            jq
+
+      # ------------------------------------------------------------
+      # Feeds
+      # ------------------------------------------------------------
+      - name: Update and install feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # ------------------------------------------------------------
+      # Configuration
+      # ------------------------------------------------------------
+      - name: Configure AX6000 U-Boot FanchmWrt
+        run: |
+          cat > .config <<'EOF'
+
+          #
+          # Target
+          #
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_filogic=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_redmi-router-ax6000-ubootmod=y
+
+          #
+          # LuCI
+          #
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-light=y
+          CONFIG_PACKAGE_luci-compat=y
+          CONFIG_PACKAGE_luci-theme-fanchmwrt=y
+          CONFIG_PACKAGE_luci-app-firewall=y
+          CONFIG_PACKAGE_luci-app-package-manager=y
+          CONFIG_PACKAGE_luci-app-uhttpd=y
+
+          #
+          # FanchmWrt / FWX
+          #
+          CONFIG_PACKAGE_luci-app-fwx-app-center=y
+          CONFIG_PACKAGE_luci-app-fwx-appfilter=y
+          CONFIG_PACKAGE_luci-app-fwx-dashboard=y
+          CONFIG_PACKAGE_luci-app-fwx-dashboard-setting=y
+          CONFIG_PACKAGE_luci-app-fwx-feature=y
+          CONFIG_PACKAGE_luci-app-fwx-mac-blacklist=y
+          CONFIG_PACKAGE_luci-app-fwx-macfilter=y
+          CONFIG_PACKAGE_luci-app-fwx-network=y
+          CONFIG_PACKAGE_luci-app-fwx-record=y
+          CONFIG_PACKAGE_luci-app-fwx-record-whitelist=y
+          CONFIG_PACKAGE_luci-app-fwx-resources=y
+          CONFIG_PACKAGE_luci-app-fwx-session-stat=y
+          CONFIG_PACKAGE_luci-app-fwx-system=y
+          CONFIG_PACKAGE_luci-app-fwx-user=y
+          CONFIG_PACKAGE_luci-app-fwx-user-record=y
+
+          #
+          # Chinese language
+          #
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn=y
+
+          CONFIG_PACKAGE_luci-i18n-fwx-app-center-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-appfilter-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-dashboard-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-dashboard-setting-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-feature-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-mac-blacklist-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-macfilter-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-network-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-record-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-record-whitelist-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-session-stat-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-system-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-user-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-fwx-user-record-zh-cn=y
+
+          #
+          # DNS / DHCP
+          #
+          CONFIG_PACKAGE_dnsmasq-full=y
+
+          #
+          # DDNS
+          #
+          CONFIG_PACKAGE_ddns-scripts=y
+          CONFIG_PACKAGE_ddns-scripts-services=y
+          CONFIG_PACKAGE_luci-app-ddns=y
+          CONFIG_PACKAGE_luci-i18n-ddns-zh-cn=y
+
+          #
+          # UPnP
+          #
+          CONFIG_PACKAGE_miniupnpd-nftables=y
+          CONFIG_PACKAGE_luci-app-upnp=y
+          CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y
+
+          #
+          # Wake-on-LAN
+          #
+          CONFIG_PACKAGE_etherwake=y
+          CONFIG_PACKAGE_luci-app-wol=y
+          CONFIG_PACKAGE_luci-i18n-wol-zh-cn=y
+
+          #
+          # USB / storage
+          #
+          CONFIG_PACKAGE_block-mount=y
+          CONFIG_PACKAGE_kmod-usb-core=y
+          CONFIG_PACKAGE_kmod-usb-storage=y
+          CONFIG_PACKAGE_kmod-scsi-core=y
+
+          #
+          # Filesystems
+          #
+          CONFIG_PACKAGE_kmod-fs-ext4=y
+          CONFIG_PACKAGE_kmod-fs-vfat=y
+          CONFIG_PACKAGE_kmod-nls-base=y
+          CONFIG_PACKAGE_kmod-nls-cp437=y
+          CONFIG_PACKAGE_kmod-nls-iso8859-1=y
+          CONFIG_PACKAGE_kmod-nls-utf8=y
+
+          #
+          # SMB / KSMBD
+          #
+          CONFIG_PACKAGE_kmod-fs-ksmbd=y
+          CONFIG_PACKAGE_ksmbd-server=y
+          CONFIG_PACKAGE_wsdd2=y
+
+          #
+          # PPP / PPPoE
+          #
+          CONFIG_PACKAGE_ppp=y
+          CONFIG_PACKAGE_ppp-mod-pppoe=y
+          CONFIG_PACKAGE_kmod-ppp=y
+          CONFIG_PACKAGE_kmod-pppoe=y
+          CONFIG_PACKAGE_luci-proto-ppp=y
+
+          #
+          # WireGuard
+          #
+          CONFIG_PACKAGE_kmod-wireguard=y
+
+          #
+          # Networking tools
+          #
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_ipset=y
+          CONFIG_PACKAGE_nftables-json=y
+
+          #
+          # SQM / CAKE
+          #
+          CONFIG_PACKAGE_kmod-sched-core=y
+          CONFIG_PACKAGE_kmod-ifb=y
+          CONFIG_PACKAGE_kmod-sched-cake=y
+
+          CONFIG_PACKAGE_tc-full=y
+          CONFIG_PACKAGE_iptables-nft=y
+          CONFIG_PACKAGE_iptables-mod-ipopt=y
+
+          CONFIG_PACKAGE_sqm-scripts=y
+          CONFIG_PACKAGE_luci-app-sqm=y
+          CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y
+
+          EOF
+
+          echo "Running make defconfig..."
+          make defconfig
+
+      # ------------------------------------------------------------
+      # Display resulting config
+      # ------------------------------------------------------------
+      - name: Show important configuration
+        run: |
+          echo "=================================================="
+          echo "TARGET"
+          echo "=================================================="
+
+          grep -E \
+            '^CONFIG_TARGET_mediatek|ax6000' \
+            .config || true
+
+          echo
+          echo "=================================================="
+          echo "FANCHMWRT / FWX"
+          echo "=================================================="
+
+          grep -E \
+            '^CONFIG_PACKAGE_luci-(app-fwx|theme-fanchmwrt)' \
+            .config || true
+
+          echo
+          echo "=================================================="
+          echo "SQM / CAKE"
+          echo "=================================================="
+
+          grep -E \
+            '^CONFIG_PACKAGE_(kmod-sched-cake|kmod-ifb|kmod-sched-core|sqm-scripts|luci-app-sqm|luci-i18n-sqm-zh-cn|tc-full)' \
+            .config || true
+
+      # ------------------------------------------------------------
+      # Validate critical settings
+      # ------------------------------------------------------------
+      - name: Validate configuration
+        run: |
+          set -e
+
+          echo "Checking target..."
+
+          grep -q \
+            '^CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_redmi-router-ax6000-ubootmod=y$' \
+            .config
+
+          echo "Checking CAKE..."
+
+          grep -q \
+            '^CONFIG_PACKAGE_kmod-sched-cake=y$' \
+            .config
+
+          echo "Checking IFB..."
+
+          grep -q \
+            '^CONFIG_PACKAGE_kmod-ifb=y$' \
+            .config
+
+          echo "Checking SQM..."
+
+          grep -q \
+            '^CONFIG_PACKAGE_sqm-scripts=y$' \
+            .config
+
+          grep -q \
+            '^CONFIG_PACKAGE_luci-app-sqm=y$' \
+            .config
+
+          echo "Checking FanchmWrt theme..."
+
+          grep -q \
+            '^CONFIG_PACKAGE_luci-theme-fanchmwrt=y$' \
+            .config
+
+          echo
+          echo "Configuration validation passed."
+
+      # ------------------------------------------------------------
+      # Cache downloaded source archives
+      # ------------------------------------------------------------
+      - name: Restore download cache
+        uses: actions/cache@v4
+        with:
+          path: dl
+          key: |
+            fanchmwrt-dl-${{ runner.os }}-${{ hashFiles('feeds.conf.default', '.config') }}
+          restore-keys: |
+            fanchmwrt-dl-${{ runner.os }}-
+
+      # ------------------------------------------------------------
+      # Download package sources
+      # ------------------------------------------------------------
+      - name: Download sources
+        run: |
+          make download -j8
+
+          echo "Removing invalid tiny downloads..."
+          find dl -type f -size -1024c -print -delete || true
+
+          echo
+          echo "Download directory size:"
+          du -sh dl || true
+
+      # ------------------------------------------------------------
+      # Build tools first
+      # ------------------------------------------------------------
+      - name: Build toolchain
+        run: |
+          make tools/install -j$(nproc)
+          make toolchain/install -j$(nproc)
+
+      # ------------------------------------------------------------
+      # Build firmware
+      # ------------------------------------------------------------
+      - name: Build firmware
+        run: |
+          echo "Starting firmware build..."
+
+          make -j$(nproc) || {
+            echo
+            echo "=================================================="
+            echo "Parallel build failed."
+            echo "Retrying single-threaded with verbose output."
+            echo "=================================================="
+            echo
+
+            make -j1 V=s
+          }
+
+      # ------------------------------------------------------------
+      # Verify output
+      # ------------------------------------------------------------
+      - name: Verify build output
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "AX6000 FIRMWARE"
+          echo "=================================================="
+
+          find bin/targets/mediatek/filogic \
+            -maxdepth 1 \
+            -type f \
+            -name '*redmi-router-ax6000-ubootmod*' \
+            -print || true
+
+          echo
+          echo "=================================================="
+          echo "CAKE PACKAGES"
+          echo "=================================================="
+
+          find bin \
+            -type f \
+            -name 'kmod-sched-cake*.apk' \
+            -print || true
+
+          echo
+          echo "=================================================="
+          echo "SQM PACKAGES"
+          echo "=================================================="
+
+          find bin \
+            -type f \
+            \( \
+              -name 'sqm-scripts*.apk' \
+              -o -name 'luci-app-sqm*.apk' \
+              -o -name 'luci-i18n-sqm-zh-cn*.apk' \
+            \) \
+            -print || true
+
+          echo
+          echo "=================================================="
+          echo "DISK SPACE"
+          echo "=================================================="
+
+          df -h
+
+      # ------------------------------------------------------------
+      # Generate checksums
+      # ------------------------------------------------------------
+      - name: Generate checksums
+        run: |
+          cd bin/targets/mediatek/filogic
+
+          sha256sum \
+            *redmi-router-ax6000-ubootmod* \
+            > ax6000-sqm-sha256sums.txt || true
+
+          cat ax6000-sqm-sha256sums.txt || true
+
+      # ------------------------------------------------------------
+      # Collect CAKE / SQM APKs separately
+      # ------------------------------------------------------------
+      - name: Collect packages
+        run: |
+          mkdir -p output/packages
+
+          find bin \
+            -type f \
+            \( \
+              -name 'kmod-sched-cake*.apk' \
+              -o -name 'kmod-ifb*.apk' \
+              -o -name 'sqm-scripts*.apk' \
+              -o -name 'luci-app-sqm*.apk' \
+              -o -name 'luci-i18n-sqm-zh-cn*.apk' \
+            \) \
+            -exec cp -v {} output/packages/ \; || true
+
+          echo
+          echo "Collected packages:"
+          ls -lh output/packages || true
+
+      # ------------------------------------------------------------
+      # Save build configuration
+      # ------------------------------------------------------------
+      - name: Save build configuration
+        run: |
+          mkdir -p output/config
+
+          cp .config output/config/fanchmwrt-ax6000-sqm.config
+
+          ./scripts/diffconfig.sh \
+            > output/config/fanchmwrt-ax6000-sqm.diffconfig \
+            || true
+
+      # ------------------------------------------------------------
+      # Upload firmware
+      # ------------------------------------------------------------
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fanchmwrt-25.12.4-ax6000-ubootmod-sqm
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+          path: |
+            bin/targets/mediatek/filogic/*redmi-router-ax6000-ubootmod*
+            bin/targets/mediatek/filogic/ax6000-sqm-sha256sums.txt
+            output/config/
+            output/packages/
